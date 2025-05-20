@@ -1,0 +1,272 @@
+name: CI/CD
+
+on:
+  push:
+    branches: [dev, tst, prod]
+  workflow_dispatch:
+
+env:
+  NX_AFFECTED_PARALLEL_TASKS: 3 # number of parallel tasks used in nx affected commands
+  # NX_SKIP_NX_CACHE: true # Temp fix for nx cloud disconnections
+
+jobs:
+  setup-pipeline:
+    name: 'Setup Pipeline'
+    environment: ${{ github.ref_name }}
+    runs-on: ubuntu-latest
+    outputs:
+      matrix-agents-array: ${{ steps.get-agents-count.outputs.matrix-agents-array }}
+      number-of-agents-required: ${{ steps.get-agents-count.outputs.number-of-agents-required }}
+    steps:
+      - name: 'Checkout'
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 'Setup Node'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+          cache: 'npm'
+
+      - name: 'Install dependencies'
+        run: npm ci
+
+      - name: 'Derive appropriate SHAs for base and head for `nx affected` commands'
+        uses: nrwl/nx-set-shas@v4
+        with:
+          main-branch-name: ${{ github.ref_name }}
+          set-environment-variables-for-job: true
+
+      - name: 'Get nx affected services in a string'
+        run: |
+          affected=$(npx nx show projects --affected --exclude='db-ops,serverless-*,*-e2e')
+          affected=$(echo $affected | sed 's/ /,/g')
+          echo $affected
+          echo "affected=\"$affected\"" >> "$GITHUB_ENV"
+
+      - name: 'Get required agents count for Distributed CI'
+        uses: actions/github-script@v7
+        id: get-agents-count
+        env:
+          NX_AFFECTED_PARALLEL_TASKS: ${{ env.NX_AFFECTED_PARALLEL_TASKS }}
+          NX_AFFECTED_SERVICES: ${{ env.affected }}
+        with:
+          script: |
+            const agentsScript = require('./get-required-nx-agents-count.js');
+            agentsScript({github, context, core})
+
+      - name: 'Cancel if no agents are required'
+        if: ${{ steps.get-agents-count.outputs.number-of-agents-required == 0 }}
+        run: exit 0
+
+  CI:
+    name: CI
+    environment: ${{ github.ref_name }}
+    needs: setup-pipeline
+    if: needs.setup-pipeline.outputs.number-of-agents-required > 0
+    runs-on: ubuntu-latest
+    env:
+      NX_CLOUD_DISTRIBUTED_EXECUTION_AGENT_COUNT: ${{ needs.setup-pipeline.outputs.number-of-agents-required }}
+    steps:
+      - name: 'Checkout'
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 'Setup Node'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+          cache: 'npm'
+
+      - name: 'Configure AWS credentials'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: eu-central-1
+
+      - name: 'Fetch env-configs from s3 bucket'
+        run: |
+          aws s3 cp s3://instapets-${{ github.ref_name }}-backend-env-configs/ . --recursive
+
+      - name: 'Install dependencies'
+        run: npm ci
+
+      - name: 'Derive appropriate SHAs for base and head for `nx affected` commands'
+        uses: nrwl/nx-set-shas@v4
+        with:
+          main-branch-name: ${{ github.ref_name }}
+          set-environment-variables-for-job: true
+
+      - name: 'Initialize the Nx Cloud distributed CI run'
+        run: npx nx-cloud start-ci-run --require-explicit-completion
+
+      - name: 'Run nx commands using agents'
+        run: |
+          pids=()
+
+          # list of commands to be run on agents
+          # npx nx affected -t test --exclude='*,!common' --base=$NX_BASE --head=$NX_HEAD & pids+=($!)
+          npx nx affected -t build --parallel=${{ env.NX_AFFECTED_PARALLEL_TASKS }} --exclude='db-ops,serverless-*,common,*-e2e' --base=$NX_BASE --head=$NX_HEAD & pids+=($!)
+
+          # run all commands using agents and bail if one of them fails
+          for pid in ${pids[*]}; do
+            if ! wait $pid; then
+              exit 1
+            fi
+          done
+
+          exit 0
+
+      - name: 'Complete CI Run'
+        if: ${{ cancelled() || failure() }}
+        run: npx nx-cloud complete-ci-run
+
+  CD:
+    name: CD
+    environment: ${{ github.ref_name }}
+    needs: CI
+    runs-on: ubuntu-latest
+    env:
+      NX_CLOUD_DISTRIBUTED_EXECUTION_AGENT_COUNT: ${{ needs.setup-pipeline.outputs.number-of-agents-required }}
+    steps:
+      - name: 'Checkout'
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 'Setup Node'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+          cache: 'npm'
+
+      - name: 'Configure AWS credentials'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: eu-central-1
+
+      - name: 'Fetch env-configs from s3'
+        run: |
+          aws s3 cp s3://instapets-${{ github.ref_name }}-backend-env-configs/ ./env-configs --recursive
+
+      - name: 'Install dependencies'
+        run: npm ci
+
+      - name: 'Derive appropriate SHAs for base and head for `nx affected` commands'
+        uses: nrwl/nx-set-shas@v4
+        with:
+          main-branch-name: ${{ github.ref_name }}
+          set-environment-variables-for-job: true
+
+      - name: 'Set up Docker Buildx'
+        uses: docker/setup-buildx-action@v3
+
+      - name: 'Login to GHCR using Docker'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 'Initialize the Nx Cloud distributed CI run'
+        run: npx nx-cloud start-ci-run --require-explicit-completion
+
+      - name: 'Run docker build commands using agents'
+        run: |
+          pids=()
+
+          # list of commands to be run on agents
+          npx nx affected -t docker:build-push:${{ github.ref_name }} --parallel=${{ env.NX_AFFECTED_PARALLEL_TASKS }} --exclude='db-ops,serverless-*,common,*-e2e' --base=$NX_BASE --head=$NX_HEAD & pids+=($!)
+
+          # run all commands using agents and bail if one of them fails
+          for pid in ${pids[*]}; do
+            if ! wait $pid; then
+              exit 1
+            fi
+          done
+
+          exit 0
+
+      - name: 'Complete CI Run when all agents are done'
+        if: ${{ success() }}
+        run: npx nx-cloud complete-ci-run
+
+      - name: 'Get nx affected services in a string for deployment'
+        run: |
+          affected=$(npx nx show projects --affected --exclude='db-ops,serverless-*,common,testing,*-e2e')
+          affected=$(echo $affected | sed 's/ /,/g')
+          echo $affected
+          echo "affected=\"$affected\"" >> "$GITHUB_ENV"
+
+      - name: 'Deploy services to Contabo VPS'
+        env:
+          PRIVATE_KEY: ${{ secrets.EC2_PRIV  }}
+          HOSTNAME: ${{ secrets.EC2_HOST  }}
+          USER_NAME: ${{ secrets.EC2_USER  }}
+        run: |
+          echo "$PRIVATE_KEY" > private_key && chmod 600 private_key
+          ssh -o StrictHostKeyChecking=no -i private_key ${USER_NAME}@${HOSTNAME} '
+
+            chmod +x ./instapets-backend-compose/scripts/deploy_service.sh &&
+            echo "${{ env.affected }}" | ./instapets-backend-compose/scripts/deploy_service.sh ${{github.ref_name}}
+          '
+
+      - name: 'Cleanup CI Run on failure'
+        if: ${{ failure() || cancelled() }}
+        run: npx nx-cloud complete-ci-run
+
+  agents:
+    name: Agent ${{ matrix.agent }}
+    environment: ${{ github.ref_name }}
+    needs: setup-pipeline
+    if: needs.setup-pipeline.outputs.number-of-agents-required > 0
+    runs-on: ubuntu-latest
+    env:
+      INPUT_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    strategy:
+      matrix:
+        agent: ${{ fromJson(needs.setup-pipeline.outputs.matrix-agents-array) }}
+    steps:
+      - name: 'Checkout'
+        uses: actions/checkout@v4
+
+      - name: 'Setup Node'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+          cache: 'npm'
+
+      - name: 'Configure AWS credentials'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: eu-central-1
+
+      - name: 'Fetch env-configs from s3'
+        run: |
+          aws s3 cp s3://instapets-${{ github.ref_name }}-backend-env-configs/ ./env-configs --recursive
+          aws s3 cp s3://instapets-${{ github.ref_name }}-backend-env-configs/ . --recursive
+
+      - name: 'Set up Docker Buildx'
+        uses: docker/setup-buildx-action@v3
+
+      - name: 'Login to GHCR using Docker'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 'Install dependencies'
+        run: npm ci
+
+      - name: 'Start Nx Agent ${{ matrix.agent }}'
+        run: npx nx-cloud start-agent
+        env:
+          NX_AGENT_NAME: ${{ matrix.agent }}

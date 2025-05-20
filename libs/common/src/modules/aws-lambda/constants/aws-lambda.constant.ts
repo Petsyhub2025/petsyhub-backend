@@ -1,0 +1,3 @@
+export const AWS_LAMBDA_MODULE_OPTIONS = Symbol('AWS_LAMBDA_MODULE_OPTIONS');
+
+export const AWS_LAMBDA_CLIENT = Symbol('AWS_LAMBDA_CLIENT');

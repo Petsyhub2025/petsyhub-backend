@@ -1,0 +1,15 @@
+export enum SocketEventsEnum {
+  EXCEPTION = 'exception',
+  JOIN_ROOM = 'join-room',
+  LEAVE_ROOM = 'leave-room',
+  ROOM_DATA = 'room-data',
+  USER_DATA = 'user-data',
+  ROOM_MESSAGES = 'room-messages',
+  SEND_MESSAGE = 'send-message',
+  NEW_MESSAGE = 'new-message',
+  DELETE_MESSAGE = 'delete-message',
+  MESSAGE_DELETED = 'message-deleted',
+  MARK_AS_READ = 'mark-as-read',
+  MESSAGE_READ = 'message-read',
+  USER_TYPING = 'user-typing',
+}

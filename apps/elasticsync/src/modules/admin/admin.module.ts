@@ -1,0 +1,68 @@
+import { Module } from '@nestjs/common';
+import { SharedModule } from '@elasticsync/shared-module/shared.module';
+import { ElasticSearchMigrationController } from './controllers/elastic-search-migration/elastic-search-migration.controller';
+import { ElasticSearchMigrationService } from './controllers/elastic-search-migration/elastic-search-migration.service';
+import { EventsHandlerService } from './controllers/message-handlers/events/handler.service';
+import { EventsListenerService } from './controllers/message-handlers/events/listener.service';
+import {
+  AdminIndexHelperService,
+  AreaIndexHelperService,
+  ChangeStreamTokenUtil,
+  CityIndexHelperService,
+  AppointmentsIndexHelperService,
+  BranchServiceTypeIndexHelperService,
+  CommentIndexHelperService,
+  CommentReplyIndexHelperService,
+  CountryIndexHelperService,
+  DynamicLinksIndexHelperService,
+  EventCategoryIndexHelperService,
+  EventFacilityIndexHelperService,
+  FoundPostIndexHelperService,
+  LostPostIndexHelperService,
+  PetBreedIndexHelperService,
+  PetFollowsIndexHelperService,
+  PetIndexHelperService,
+  PetTypeIndexHelperService,
+  PostIndexHelperService,
+  ServiceProviderBranchIndexHelperService,
+  ServiceProviderIndexHelperService,
+  UserFollowsIndexHelperService,
+  UserIndexHelperService,
+  UserPushNotificationsIndexHelperService,
+  UserSegmentsIndexHelperService,
+} from './shared';
+@Module({
+  imports: [SharedModule],
+  controllers: [ElasticSearchMigrationController],
+  providers: [
+    ElasticSearchMigrationService,
+    AreaIndexHelperService,
+    CityIndexHelperService,
+    CountryIndexHelperService,
+    PetBreedIndexHelperService,
+    PetTypeIndexHelperService,
+    PetIndexHelperService,
+    CommentReplyIndexHelperService,
+    CommentIndexHelperService,
+    PostIndexHelperService,
+    UserIndexHelperService,
+    BranchServiceTypeIndexHelperService,
+    ServiceProviderIndexHelperService,
+    ServiceProviderBranchIndexHelperService,
+    UserFollowsIndexHelperService,
+    PetFollowsIndexHelperService,
+    AdminIndexHelperService,
+    EventCategoryIndexHelperService,
+    EventFacilityIndexHelperService,
+    AppointmentsIndexHelperService,
+    UserSegmentsIndexHelperService,
+    DynamicLinksIndexHelperService,
+    UserPushNotificationsIndexHelperService,
+    LostPostIndexHelperService,
+    FoundPostIndexHelperService,
+    EventsHandlerService,
+    EventsListenerService,
+    ChangeStreamTokenUtil,
+  ],
+})
+export class AdminModule {}

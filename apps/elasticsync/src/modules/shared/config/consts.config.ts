@@ -1,0 +1,3 @@
+export const DOCUMENTS_COUNT_PER_SYNC_ITERATION = 1000;
+export const CONNECTION_RETRY_DELAY = 2000; //in ms
+export const MAX_CONNECTION_RETRIES = 10;

@@ -1,0 +1,12 @@
+node_modules
+serverless
+serverless-common
+db-ops
+.eslintrc.js
+dist
+node_modules
+testing/**/*.ts
+*.spec.ts
+jest.config.ts
+webpack*.js
+@types
